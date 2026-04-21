@@ -1,0 +1,10 @@
+funcion suma(x, y)
+    retornar x + y
+finfuncion
+
+inicio
+    a = 10
+    b = 20
+    total = suma(a, b)
+    escribir(total)
+fin

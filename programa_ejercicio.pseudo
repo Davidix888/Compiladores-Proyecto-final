@@ -1,0 +1,10 @@
+inicio
+    a = 10
+    b = 20
+    c = a + b * 2
+    si (c > 30) entonces
+        escribir(c)
+        d = c - 10
+    finsi
+    escribir(d)
+fin
