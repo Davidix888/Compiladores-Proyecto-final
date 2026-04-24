@@ -1,344 +1,148 @@
-from __future__ import annotations
+import lexico
 
-from dataclasses import dataclass, field
-
-from lexico import Token
-
-
-class ASTNode:
-    def to_dict(self) -> dict:
-        raise NotImplementedError
-
-
-class Statement(ASTNode):
-    pass
-
-
-class Expression(ASTNode):
-    pass
-
-
-@dataclass(slots=True)
-class Program(ASTNode):
-    functions: list["FunctionDef"] = field(default_factory=list)
-    statements: list[Statement] = field(default_factory=list)
-
-    def to_dict(self) -> dict:
-        return {
-            "tipo": "programa",
-            "funciones": [function.to_dict() for function in self.functions],
-            "cuerpo": [statement.to_dict() for statement in self.statements],
-        }
-
-
-@dataclass(slots=True)
-class FunctionDef(ASTNode):
-    name: str
-    parameters: list[str]
-    body: list[Statement]
-
-    def to_dict(self) -> dict:
-        return {
-            "tipo": "funcion",
-            "nombre": self.name,
-            "parametros": self.parameters,
-            "cuerpo": [statement.to_dict() for statement in self.body],
-        }
-
-
-@dataclass(slots=True)
-class Assignment(Statement):
-    name: str
-    expression: Expression
-
-    def to_dict(self) -> dict:
-        return {
-            "tipo": "asignacion",
-            "variable": self.name,
-            "expresion": self.expression.to_dict(),
-        }
-
-
-@dataclass(slots=True)
-class Write(Statement):
-    expression: Expression
-
-    def to_dict(self) -> dict:
-        return {
-            "tipo": "escribir",
-            "expresion": self.expression.to_dict(),
-        }
-
-
-@dataclass(slots=True)
-class IfStatement(Statement):
-    condition: Expression
-    body: list[Statement]
-
-    def to_dict(self) -> dict:
-        return {
-            "tipo": "si",
-            "condicion": self.condition.to_dict(),
-            "entonces": [statement.to_dict() for statement in self.body],
-        }
-
-
-@dataclass(slots=True)
-class Return(Statement):
-    expression: Expression
-
-    def to_dict(self) -> dict:
-        return {
-            "tipo": "retornar",
-            "expresion": self.expression.to_dict(),
-        }
-
-
-@dataclass(slots=True)
-class NumberLiteral(Expression):
-    value: int
-
-    def to_dict(self) -> dict:
-        return {
-            "tipo": "constante",
-            "valor": self.value,
-        }
-
-
-@dataclass(slots=True)
-class Variable(Expression):
-    name: str
-
-    def to_dict(self) -> dict:
-        return {
-            "tipo": "variable",
-            "nombre": self.name,
-        }
-
-
-@dataclass(slots=True)
-class BinaryOperation(Expression):
-    left: Expression
-    operator: str
-    right: Expression
-
-    def to_dict(self) -> dict:
-        return {
-            "tipo": "operacion_binaria",
-            "operador": self.operator,
-            "izquierda": self.left.to_dict(),
-            "derecha": self.right.to_dict(),
-        }
-
-
-@dataclass(slots=True)
-class FunctionCall(Expression):
-    name: str
-    arguments: list[Expression]
-
-    def to_dict(self) -> dict:
-        return {
-            "tipo": "llamada_funcion",
-            "nombre": self.name,
-            "argumentos": [argument.to_dict() for argument in self.arguments],
-        }
-
-
+# Analizador sintactico 
 class Parser:
-    def __init__(self, tokens: list[Token]):
+    def __init__(self, tokens):
         self.tokens = tokens
-        self.position = 0
+        self.pos = 0
+    
+    def obtener_token_actual(self):
+        return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+    
+    def coincidir(self, tipo_esperado):
+        token_actual = self.obtener_token_actual()
+        if token_actual and token_actual[0] == tipo_esperado:
+            self.pos +=1
+            return token_actual
+        else:
+            raise SyntaxError(f"Error sintactico: Se esperaba {tipo_esperado}, pero se encontro: {token_actual}")
 
-    def parse(self) -> Program:
-        self._consume_newlines()
+    def parsear(self):
+        # Punto de entrada: Se espera una funcion
+        return self.funcion()
 
-        functions: list[FunctionDef] = []
-        while self._current().type == "FUNCION":
-            functions.append(self._parse_function())
-            self._consume_newlines()
+    def funcion(self):
+        # Gramatica para una funcion: int IDENTIFIER (int IDENTIFIER) {CUERPO}
+        tipo_retorno = self.coincidir('KEYWORD')            # Tipo de retorno (ej. int)
+        nombre_funcion = self.coincidir('IDENTIFIER')       # Nombre de la funcion
+        self.coincidir('DELIMITER')                         # Se espera un (
 
-        self._expect("INICIO")
-        self._consume_newlines()
-        statements = self._parse_block({"FIN"})
-        self._expect("FIN")
-        self._consume_newlines()
-        self._expect("EOF")
-        return Program(functions=functions, statements=statements)
+        if nombre_funcion == 'main':
+            parametros = []
+        else:
+            parametros = self.parametros()                      # Regla para los parametros
+        self.coincidir('DELIMITER')                         # Se espera un )
+        self.coincidir('DELIMITER')                         # Se espera un {
+        cuerpo = self.cuerpo()                              # Regla para el cuerpo de la funcion
+        self.coincidir('DELIMITER')                         # Se espera un }
 
-    def _parse_function(self) -> FunctionDef:
-        self._expect("FUNCION")
-        name = self._expect("IDENTIFIER").value
-        self._expect("LPAREN")
+        return lexico.NodoFuncion(tipo_retorno, nombre_funcion, parametros, cuerpo)
 
-        parameters: list[str] = []
-        if self._current().type != "RPAREN":
-            parameters.append(self._expect("IDENTIFIER").value)
-            while self._match("COMMA"):
-                parameters.append(self._expect("IDENTIFIER").value)
+    def parametros(self):
+        lista_parametros = []
 
-        self._expect("RPAREN")
-        self._consume_newlines()
-        body = self._parse_block({"FINFUNCION"})
-        self._expect("FINFUNCION")
-        return FunctionDef(name=name, parameters=parameters, body=body)
+        # Reglas para parametros: int IDENTIFIER (, int IDENTIFIER)*
+        tipo = self.coincidir('KEYWORD')                    # Tipo de parametro
+        nombre = self.coincidir('IDENTIFIER')               # Nombre del parametro
 
-    def _parse_block(self, end_tokens: set[str]) -> list[Statement]:
-        statements: list[Statement] = []
-        self._consume_newlines()
+        lista_parametros.append(lexico.NodoParametro(tipo, nombre))
 
-        while self._current().type not in end_tokens and self._current().type != "EOF":
-            statements.append(self._parse_statement())
+        while self.obtener_token_actual() and self.obtener_token_actual()[1] == ',':
+            self.coincidir('DELIMITER')                     # Se espera una ,
+            tipo = self.coincidir('KEYWORD')                # Tipo de paramentro
+            nombre = self.coincidir('IDENTIFIER')           # Nombre de parametro
 
-            if self._current().type == "NEWLINE":
-                self._consume_newlines()
-            elif self._current().type not in end_tokens:
-                token = self._current()
-                raise SyntaxError(
-                    "Se esperaba un salto de linea antes de "
-                    f"{token.value!r} en linea {token.line}"
-                )
+            lista_parametros.append(lexico.NodoParametro(tipo, nombre))
+        
+        return lista_parametros
 
-        return statements
+    def cuerpo(self):
+        instrucciones = []
 
-    def _parse_statement(self) -> Statement:
-        token = self._current()
+        while self.obtener_token_actual() and self.obtener_token_actual()[1] != '}':
+            token = self.obtener_token_actual()
 
-        if token.type == "IDENTIFIER" and self._peek().type == "ASSIGN":
-            return self._parse_assignment()
-        if token.type == "ESCRIBIR":
-            return self._parse_write()
-        if token.type == "SI":
-            return self._parse_if()
-        if token.type == "RETORNAR":
-            return self._parse_return()
+            if token[1] == 'return':
+                instrucciones.append(self.retorno())
 
-        raise SyntaxError(
-            f"Instruccion no reconocida {token.value!r} en linea {token.line}"
-        )
+            elif token[0] == 'KEYWORD':
+                instrucciones.append(self.asignacion())
 
-    def _parse_assignment(self) -> Assignment:
-        name = self._expect("IDENTIFIER").value
-        self._expect("ASSIGN")
-        expression = self._parse_expression()
-        return Assignment(name=name, expression=expression)
+            elif token[0] == 'IDENTIFIER':
+                instrucciones.append(self.llamadaComoInstruccion())
 
-    def _parse_write(self) -> Write:
-        self._expect("ESCRIBIR")
-        self._expect("LPAREN")
-        expression = self._parse_expression()
-        self._expect("RPAREN")
-        return Write(expression=expression)
+            else:
+                raise SyntaxError(f"Instruccion no valida: {token}")
 
-    def _parse_if(self) -> IfStatement:
-        self._expect("SI")
-        self._expect("LPAREN")
-        condition = self._parse_expression()
-        self._expect("RPAREN")
-        self._expect("ENTONCES")
-        self._consume_newlines()
-        body = self._parse_block({"FINSI"})
-        self._expect("FINSI")
-        return IfStatement(condition=condition, body=body)
+        return instrucciones
 
-    def _parse_return(self) -> Return:
-        self._expect("RETORNAR")
-        expression = self._parse_expression()
-        return Return(expression=expression)
+    def asignacion(self):
+        # Gramatica para la estrucutra de una asignacion
+        tipo = self.coincidir('KEYWORD')                    # Se espera un tipo
+        nombre = self.coincidir('IDENTIFIER')
+        self.coincidir('OPERATOR')                          # Se espera un =
+        expresion = self.expresion()
+        self.coincidir('DELIMITER')                         # Se espera un ;
 
-    def _parse_expression(self) -> Expression:
-        return self._parse_comparison()
+        return lexico.NodoAsignacion(tipo, nombre, expresion)        
+    
+    def retorno(self):
+        self.coincidir('KEYWORD')                           # Se espera un return
+        expresion = self.expresion()
+        self.coincidir('DELIMITER')
+        return lexico.NodoRetorno(expresion)
+    
+    def expresion(self):
+        izquierda = self.termino()
+        while self.obtener_token_actual() and self.obtener_token_actual()[0] == 'OPERATOR':
+            operador = self.coincidir('OPERATOR')
+            derecha = self.termino()
+            izquierda = lexico.NodoOperacion(izquierda, operador, derecha)
+        return izquierda
+    
+    def termino(self):
+        token = self.obtener_token_actual()
+        if token[0] == 'NUMBER':
+            return lexico.NodoNumero(self.coincidir('NUMBER'))
+        elif token[0] =='IDENTIFIER':
+            identificador = self.coincidir('IDENTIFIER')
+            if self.obtener_token_actual() and self.obtener_token_actual()[1] == '(':
+                
+                self.coincidir('DELIMITER')
+                argumentos = self.llamadaFuncion()
+                self.coincidir('DELIMITER')
+                return lexico.NodoLlamadaFuncion(identificador[1], argumentos)
+            else:
+                return lexico.NodoIdentificador(identificador)
+        else:
+            raise SyntaxError(f'Expresion no valida: {token}')
+    
+    def llamadaFuncion(self):
+        argumentos = []
+        # Reglas para argumentos: IDENTIFIER | NUMBER (, IDENTIFIER | NUMBER)*
+        sigue = True
+        token = self.obtener_token_actual()
+        while sigue: 
+            sigue = False
+            if token[0] == 'NUMBER':
+                argumento = lexico.NodoNumero(self.coincidir('NUMBER'))
+            elif token[0] == 'IDENTIFIER':
+                argumento = lexico.NodoIdentificador(self.coincidir('IDENTIFIER'))
+            else:
+                raise SyntaxError(f'Error de sinaxxis, se esperaba un identificador o numero pero se encontro token actual')
+            argumentos.append(argumento)
+            if self.obtener_token_actual() and self.obtener_token_actual()[1] == ',':
+                self.coincidir('DELIMITER')     # Se espera una coma
+                token = self.obtener_token_actual()
+                sigue = True
+        return argumentos
+    
+    def llamadaComoInstruccion(self):
+        identificador = self.coincidir('IDENTIFIER')
+        self.coincidir('DELIMITER')  # (
+        argumentos = self.llamadaFuncion()
+        self.coincidir('DELIMITER')  # )
+        self.coincidir('DELIMITER')  # ;
 
-    def _parse_comparison(self) -> Expression:
-        expression = self._parse_addition()
+        return lexico.NodoLlamadaFuncion(identificador[1], argumentos)
 
-        while self._current().type == "REL_OP":
-            operator = self._expect("REL_OP").value
-            right = self._parse_addition()
-            expression = BinaryOperation(expression, operator, right)
-
-        return expression
-
-    def _parse_addition(self) -> Expression:
-        expression = self._parse_multiplication()
-
-        while self._current().type in {"PLUS", "MINUS"}:
-            operator = self._advance().value
-            right = self._parse_multiplication()
-            expression = BinaryOperation(expression, operator, right)
-
-        return expression
-
-    def _parse_multiplication(self) -> Expression:
-        expression = self._parse_unary()
-
-        while self._current().type in {"STAR", "SLASH"}:
-            operator = self._advance().value
-            right = self._parse_unary()
-            expression = BinaryOperation(expression, operator, right)
-
-        return expression
-
-    def _parse_unary(self) -> Expression:
-        if self._match("MINUS"):
-            return BinaryOperation(NumberLiteral(0), "-", self._parse_unary())
-        return self._parse_primary()
-
-    def _parse_primary(self) -> Expression:
-        token = self._current()
-
-        if token.type == "NUMBER":
-            return NumberLiteral(int(self._advance().value))
-
-        if token.type == "IDENTIFIER":
-            name = self._advance().value
-            if self._match("LPAREN"):
-                arguments: list[Expression] = []
-                if self._current().type != "RPAREN":
-                    arguments.append(self._parse_expression())
-                    while self._match("COMMA"):
-                        arguments.append(self._parse_expression())
-                self._expect("RPAREN")
-                return FunctionCall(name=name, arguments=arguments)
-            return Variable(name=name)
-
-        if token.type == "LPAREN":
-            self._advance()
-            expression = self._parse_expression()
-            self._expect("RPAREN")
-            return expression
-
-        raise SyntaxError(
-            f"Expresion invalida {token.value!r} en linea {token.line}"
-        )
-
-    def _current(self) -> Token:
-        return self.tokens[self.position]
-
-    def _peek(self, offset: int = 1) -> Token:
-        index = min(self.position + offset, len(self.tokens) - 1)
-        return self.tokens[index]
-
-    def _advance(self) -> Token:
-        token = self._current()
-        self.position += 1
-        return token
-
-    def _expect(self, token_type: str) -> Token:
-        token = self._current()
-        if token.type != token_type:
-            raise SyntaxError(
-                f"Se esperaba {token_type} y se encontro {token.type} "
-                f"({token.value!r}) en linea {token.line}"
-            )
-        self.position += 1
-        return token
-
-    def _match(self, token_type: str) -> bool:
-        if self._current().type == token_type:
-            self.position += 1
-            return True
-        return False
-
-    def _consume_newlines(self) -> None:
-        while self._current().type == "NEWLINE":
-            self.position += 1
